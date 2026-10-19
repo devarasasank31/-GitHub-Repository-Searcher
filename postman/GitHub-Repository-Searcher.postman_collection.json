@@ -1,0 +1,397 @@
+{
+  "info": {
+    "_postman_id": "a1f0c2e4-7b3d-4e9a-9c1f-2d6e8b5a4c30",
+    "name": "GitHub Repository Searcher",
+    "description": "REST API that searches GitHub repositories and persists results in PostgreSQL.\n\nBase URL defaults to http://localhost:8080 (Docker Compose or local run).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Get health status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["actuator", "health"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Search repositories",
+      "item": [
+        {
+          "name": "Search — stars sort (default)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Has repositories array', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property('totalCount');",
+                  "    pm.expect(body.repositories).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"spring boot\",\n  \"language\": \"Java\",\n  \"sort\": \"stars\",\n  \"maxResults\": 10\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/github/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "github", "search"]
+            },
+            "description": "Searches for Java repositories matching 'spring boot', sorted by stars."
+          }
+        },
+        {
+          "name": "Search — forks sort",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"kubernetes operator\",\n  \"sort\": \"forks\",\n  \"maxResults\": 5\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/github/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "github", "search"]
+            },
+            "description": "Sorts matches by fork count."
+          }
+        },
+        {
+          "name": "Search — updated sort, minimal body",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"rust web framework\",\n  \"sort\": \"updated\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/github/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "github", "search"]
+            },
+            "description": "Only 'query' is required; sort and maxResults fall back to defaults."
+          }
+        },
+        {
+          "name": "Search — empty result set",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('totalCount is 0', () => pm.expect(pm.response.json().totalCount).to.eql(0));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"zzzzunlikelyqueryzzzz\",\n  \"maxResults\": 1\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/github/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "github", "search"]
+            },
+            "description": "A query that matches nothing should return an empty repositories array, not an error."
+          }
+        },
+        {
+          "name": "Search — repeated query is idempotent (upsert)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"spring boot\",\n  \"maxResults\": 10\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/github/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "github", "search"]
+            },
+            "description": "Run this twice and check the database: the same repository id must appear once (upsert), not duplicated."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Errors",
+      "item": [
+        {
+          "name": "400 — blank query",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Has stable error body', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.all.keys('timestamp', 'status', 'error', 'message', 'path');",
+                  "    pm.expect(body.status).to.eql(400);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"  \"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/github/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "github", "search"]
+            }
+          }
+        },
+        {
+          "name": "400 — unsupported sort",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Message names supported values', () => {",
+                  "    pm.expect(pm.response.json().message).to.include('stars, forks, updated');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"spring\",\n  \"sort\": \"popularity\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/github/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "github", "search"]
+            }
+          }
+        },
+        {
+          "name": "400 — maxResults out of range",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"spring\",\n  \"maxResults\": 500\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/github/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "github", "search"]
+            }
+          }
+        },
+        {
+          "name": "400 — malformed JSON",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{not-valid-json"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/github/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "github", "search"]
+            }
+          }
+        },
+        {
+          "name": "404 — unknown route",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/github/nope",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "github", "nope"]
+            }
+          }
+        },
+        {
+          "name": "429 / 502 / 503 — upstream-dependent errors",
+          "event": [],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"spring boot\",\n  \"maxResults\": 10\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/github/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "github", "search"]
+            },
+            "description": "Rate limiting (429), GitHub auth/upstream failures (502) and unreachability (503) depend on GitHub's live state and are exercised deterministically by the automated tests (WireMock), not by this request. To reproduce locally: point GITHUB_API_BASE_URL at a stub returning 429/500/401, or exhaust the unauthenticated GitHub rate limit (10 searches/min without a token)."
+          }
+        }
+      ]
+    }
+  ]
+}
