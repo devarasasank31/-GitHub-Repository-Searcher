@@ -2,6 +2,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: github-searcher-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-github_searcher}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -16,6 +17,28 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+
+  app:
+    build: .
+    container_name: github-searcher-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-github_searcher}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      GITHUB_API_BASE_URL: ${GITHUB_API_BASE_URL:-https://api.github.com}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
 volumes:
   postgres-data:
