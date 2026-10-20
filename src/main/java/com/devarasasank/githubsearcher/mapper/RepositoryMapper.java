@@ -54,6 +54,21 @@ public class RepositoryMapper {
     }
 
     /**
+     * Maps a persisted entity to its public response form.
+     */
+    public RepositoryResponse toResponse(GitHubRepositoryEntity entity) {
+        return new RepositoryResponse(
+                entity.getId(),
+                entity.getName(),
+                entity.getDescription(),
+                entity.getOwner(),
+                entity.getLanguage(),
+                entity.getStars(),
+                entity.getForks(),
+                entity.getLastUpdated());
+    }
+
+    /**
      * Maps a list of client items to their public response form, preserving
      * order and skipping {@code null} entries defensively.
      */

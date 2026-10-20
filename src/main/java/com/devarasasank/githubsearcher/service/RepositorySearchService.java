@@ -7,13 +7,17 @@ import com.devarasasank.githubsearcher.dto.RepositorySort;
 import com.devarasasank.githubsearcher.dto.SearchRepositoriesRequest;
 import com.devarasasank.githubsearcher.dto.SearchRepositoriesResponse;
 import com.devarasasank.githubsearcher.entity.GitHubRepositoryEntity;
+import com.devarasasank.githubsearcher.exception.InvalidSortException;
 import com.devarasasank.githubsearcher.mapper.RepositoryMapper;
+import com.devarasasank.githubsearcher.repository.GitHubRepositoryRepository;
 import com.devarasasank.githubsearcher.repository.GitHubRepositoryUpserter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Orchestrates a repository search: validates and normalises the request,
@@ -31,13 +35,16 @@ public class RepositorySearchService {
 
     private final GitHubApiClient gitHubApiClient;
     private final GitHubRepositoryUpserter upserter;
+    private final GitHubRepositoryRepository repository;
     private final RepositoryMapper mapper;
 
     public RepositorySearchService(GitHubApiClient gitHubApiClient,
                                    GitHubRepositoryUpserter upserter,
+                                   GitHubRepositoryRepository repository,
                                    RepositoryMapper mapper) {
         this.gitHubApiClient = gitHubApiClient;
         this.upserter = upserter;
+        this.repository = repository;
         this.mapper = mapper;
     }
 
@@ -58,6 +65,41 @@ public class RepositorySearchService {
 
         List<RepositoryResponse> repositories = mapper.toResponseList(items);
         return new SearchRepositoriesResponse(repositories.size(), repositories);
+    }
+
+    /**
+     * Returns repositories already persisted in PostgreSQL, optionally
+     * filtered by language and minimum star count. Never calls the GitHub
+     * API; results are ordered descending by the requested sort field
+     * (stars by default).
+     *
+     * @param language  optional language filter, case-insensitive
+     * @param minStars  optional minimum star count
+     * @param sortParam one of {@code stars}, {@code forks}, {@code updated}
+     * @return the stored repositories matching the filters
+     * @throws InvalidSortException for an unsupported sort value
+     */
+    public SearchRepositoriesResponse findStored(String language, Long minStars, String sortParam) {
+        RepositorySort sort = RepositorySort.fromParam(sortParam);
+        String languageFilter = (language == null || language.isBlank())
+                ? null
+                : language.trim().toLowerCase(Locale.ROOT);
+
+        List<GitHubRepositoryEntity> entities = repository.findByFilters(
+                languageFilter, minStars, Sort.by(Sort.Direction.DESC, sortProperty(sort)));
+
+        List<RepositoryResponse> repositories = entities.stream()
+                .map(mapper::toResponse)
+                .toList();
+        return new SearchRepositoriesResponse(repositories.size(), repositories);
+    }
+
+    private static String sortProperty(RepositorySort sort) {
+        return switch (sort) {
+            case STARS -> "stars";
+            case FORKS -> "forks";
+            case UPDATED -> "lastUpdated";
+        };
     }
 
     private void persistQuietly(List<GitHubRepositoryItem> items) {

@@ -47,9 +47,15 @@ public class GlobalExceptionHandler {
             HttpMessageNotReadableException.class,
             MethodArgumentTypeMismatchException.class})
     public ResponseEntity<ApiError> handleBadRequest(Exception ex, HttpServletRequest request) {
-        String message = ex instanceof InvalidSortException invalidSort
-                ? invalidSort.getMessage()
-                : "Request body is missing or malformed";
+        String message;
+        if (ex instanceof InvalidSortException invalidSort) {
+            message = invalidSort.getMessage();
+        } else if (ex instanceof MethodArgumentTypeMismatchException mismatch) {
+            message = "Invalid value '" + mismatch.getValue()
+                    + "' for parameter '" + mismatch.getName() + "'";
+        } else {
+            message = "Request body is missing or malformed";
+        }
         return build(HttpStatus.BAD_REQUEST, message, request);
     }
 

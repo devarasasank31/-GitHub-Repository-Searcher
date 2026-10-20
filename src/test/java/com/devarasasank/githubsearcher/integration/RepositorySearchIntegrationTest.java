@@ -23,6 +23,11 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.List;
+
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 
@@ -108,8 +113,37 @@ class RepositorySearchIntegrationTest {
                 new HttpEntity<>(body, headers), String.class);
     }
 
+    private ResponseEntity<String> getFrom(String path) {
+        return restTemplate.getForEntity(path, String.class);
+    }
+
+    private void insertRepository(long id, String name, String language, long stars, long forks,
+                                  OffsetDateTime lastUpdated) {
+        jdbcTemplate.update("""
+                        INSERT INTO github_repositories
+                            (id, name, description, owner, language, stars, forks, last_updated, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, now(), now())
+                        """,
+                id, name, "description of " + name, "owner" + id, language, stars, forks, lastUpdated);
+    }
+
+    private void seedThreeRepositories() {
+        insertRepository(1L, "alpha", "Java", 100, 10,
+                OffsetDateTime.of(2024, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC));
+        insertRepository(2L, "beta", "Java", 500, 50,
+                OffsetDateTime.of(2024, 2, 1, 0, 0, 0, 0, ZoneOffset.UTC));
+        insertRepository(3L, "gamma", "Python", 50, 70,
+                OffsetDateTime.of(2024, 3, 1, 0, 0, 0, 0, ZoneOffset.UTC));
+    }
+
     private JsonNode parse(ResponseEntity<String> response) throws Exception {
         return MAPPER.readTree(response.getBody());
+    }
+
+    private static List<String> names(JsonNode json) {
+        List<String> names = new ArrayList<>();
+        json.get("repositories").forEach(repo -> names.add(repo.get("name").asText()));
+        return names;
     }
 
     @Test
@@ -188,6 +222,109 @@ class RepositorySearchIntegrationTest {
         ResponseEntity<String> response = post("{\"query\": \"spring\", \"maxResults\": 10}");
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    @Test
+    void getRepositoriesReturnsStoredRowsSortedByStarsDescending() throws Exception {
+        seedThreeRepositories();
+
+        ResponseEntity<String> response = getFrom("/api/github/repositories");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode json = parse(response);
+        assertThat(json.get("totalCount").asInt()).isEqualTo(3);
+        assertThat(names(json)).containsExactly("beta", "alpha", "gamma");
+        assertThat(json.get("repositories").get(0).get("owner").asText()).isEqualTo("owner2");
+        wireMock.verify(0, getRequestedForAnySearch());
+    }
+
+    @Test
+    void getRepositoriesFiltersByLanguageCaseInsensitivelyAndMinStars() throws Exception {
+        seedThreeRepositories();
+
+        JsonNode byLanguage = parse(getFrom("/api/github/repositories?language=java"));
+        assertThat(names(byLanguage)).containsExactly("beta", "alpha");
+
+        JsonNode filtered = parse(getFrom("/api/github/repositories?language=java&minStars=200"));
+        assertThat(filtered.get("totalCount").asInt()).isEqualTo(1);
+        assertThat(names(filtered)).containsExactly("beta");
+
+        JsonNode noneMatch = parse(getFrom("/api/github/repositories?language=Rust&minStars=1000"));
+        assertThat(noneMatch.get("totalCount").asInt()).isZero();
+        assertThat(noneMatch.get("repositories").isEmpty()).isTrue();
+        wireMock.verify(0, getRequestedForAnySearch());
+    }
+
+    @Test
+    void getRepositoriesSortsByForksAndUpdated() throws Exception {
+        seedThreeRepositories();
+
+        JsonNode byForks = parse(getFrom("/api/github/repositories?sort=forks"));
+        assertThat(names(byForks)).containsExactly("gamma", "beta", "alpha");
+
+        JsonNode byUpdated = parse(getFrom("/api/github/repositories?sort=updated"));
+        assertThat(names(byUpdated)).containsExactly("gamma", "beta", "alpha");
+    }
+
+    @Test
+    void getRepositoriesReturnsEmptyListWhenDatabaseIsEmpty() throws Exception {
+        ResponseEntity<String> response = getFrom("/api/github/repositories");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode json = parse(response);
+        assertThat(json.get("totalCount").asInt()).isZero();
+        assertThat(json.get("repositories").isEmpty()).isTrue();
+    }
+
+    @Test
+    void getRepositoriesInvalidSortReturns400() throws Exception {
+        ResponseEntity<String> response = getFrom("/api/github/repositories?sort=popularity");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        JsonNode json = parse(response);
+        assertThat(json.get("status").asInt()).isEqualTo(400);
+        assertThat(json.get("message").asText())
+                .isEqualTo("Unsupported sort value 'popularity'. Supported values: stars, forks, updated");
+        wireMock.verify(0, getRequestedForAnySearch());
+    }
+
+    @Test
+    void getRepositoriesInvalidMinStarsReturns400() throws Exception {
+        ResponseEntity<String> response = getFrom("/api/github/repositories?minStars=abc");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        JsonNode json = parse(response);
+        assertThat(json.get("status").asInt()).isEqualTo(400);
+        assertThat(json.get("message").asText())
+                .isEqualTo("Invalid value 'abc' for parameter 'minStars'");
+    }
+
+    @Test
+    void searchResultsAreReadableThroughGetEndpoint() throws Exception {
+        wireMock.stubFor(get(urlPathEqualTo("/search/repositories"))
+                .willReturn(okJson(GITHUB_RESPONSE)));
+
+        post("{\"query\": \"spring boot\", \"maxResults\": 10}");
+
+        ResponseEntity<String> response = getFrom("/api/github/repositories");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode json = parse(response);
+        assertThat(json.get("totalCount").asInt()).isEqualTo(1);
+        assertThat(json.get("repositories").get(0).get("name").asText()).isEqualTo("Hello-World");
+        assertThat(json.get("repositories").get(0).get("stars").asLong()).isEqualTo(2543L);
+    }
+
+    @Test
+    void apiDocsDocumentGetRepositoriesEndpoint() throws Exception {
+        ResponseEntity<String> response = getFrom("/v3/api-docs");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode json = parse(response);
+        JsonNode operations = json.get("paths").get("/api/github/repositories");
+        assertThat(operations).isNotNull();
+        assertThat(operations.has("get")).isTrue();
+        assertThat(operations.get("get").get("summary").asText()).isEqualTo("List stored repositories");
     }
 
     private static com.github.tomakehurst.wiremock.matching.RequestPatternBuilder getRequestedForAnySearch() {

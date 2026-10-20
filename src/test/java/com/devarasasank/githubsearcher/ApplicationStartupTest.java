@@ -1,5 +1,6 @@
 package com.devarasasank.githubsearcher;
 
+import com.devarasasank.githubsearcher.repository.GitHubRepositoryRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -31,6 +32,9 @@ class ApplicationStartupTest {
 
     @MockitoBean
     private JdbcTemplate jdbcTemplate;
+
+    @MockitoBean
+    private GitHubRepositoryRepository gitHubRepositoryRepository;
 
     @Autowired
     private MockMvc mockMvc;

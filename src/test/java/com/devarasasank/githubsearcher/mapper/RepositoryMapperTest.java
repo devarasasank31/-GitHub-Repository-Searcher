@@ -88,4 +88,37 @@ class RepositoryMapperTest {
 
         assertThat(mapper.toResponseList(withNull)).hasSize(1);
     }
+
+    @Test
+    void toResponseMapsPersistedEntity() {
+        GitHubRepositoryEntity entity = new GitHubRepositoryEntity(
+                7L, "repo", "stored description", "octocat", "Java", 100L, 42L,
+                OffsetDateTime.of(2024, 1, 1, 12, 0, 0, 0, ZoneOffset.UTC));
+
+        RepositoryResponse response = mapper.toResponse(entity);
+
+        assertThat(response.id()).isEqualTo(7L);
+        assertThat(response.name()).isEqualTo("repo");
+        assertThat(response.description()).isEqualTo("stored description");
+        assertThat(response.owner()).isEqualTo("octocat");
+        assertThat(response.language()).isEqualTo("Java");
+        assertThat(response.stars()).isEqualTo(100L);
+        assertThat(response.forks()).isEqualTo(42L);
+        assertThat(response.lastUpdated())
+                .isEqualTo(OffsetDateTime.of(2024, 1, 1, 12, 0, 0, 0, ZoneOffset.UTC));
+    }
+
+    @Test
+    void toResponseMapsEntityWithNullOptionalFields() {
+        GitHubRepositoryEntity entity = new GitHubRepositoryEntity(
+                8L, "no-desc", null, "octocat", null, 0L, 0L,
+                OffsetDateTime.of(2024, 6, 1, 0, 0, 0, 0, ZoneOffset.UTC));
+
+        RepositoryResponse response = mapper.toResponse(entity);
+
+        assertThat(response.description()).isNull();
+        assertThat(response.language()).isNull();
+        assertThat(response.stars()).isZero();
+        assertThat(response.forks()).isZero();
+    }
 }

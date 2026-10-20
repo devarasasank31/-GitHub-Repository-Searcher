@@ -23,9 +23,11 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -194,5 +196,86 @@ class RepositorySearchControllerTest {
         assertThat(forwarded.language()).isEqualTo("Java");
         assertThat(forwarded.sort()).isEqualTo("stars");
         assertThat(forwarded.maxResults()).isEqualTo(30);
+    }
+
+    @Test
+    void listReturns200WithDefaultsWhenNoParams() throws Exception {
+        when(searchService.findStored(any(), any(), any())).thenReturn(sampleResponse());
+
+        mockMvc.perform(get("/api/github/repositories"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalCount").value(1))
+                .andExpect(jsonPath("$.repositories[0].id").value(1))
+                .andExpect(jsonPath("$.repositories[0].name").value("Hello-World"));
+
+        verify(searchService).findStored(null, null, "stars");
+    }
+
+    @Test
+    void listForwardsQueryParameters() throws Exception {
+        when(searchService.findStored(any(), any(), any())).thenReturn(sampleResponse());
+
+        mockMvc.perform(get("/api/github/repositories")
+                        .param("language", "Java")
+                        .param("minStars", "100")
+                        .param("sort", "forks"))
+                .andExpect(status().isOk());
+
+        verify(searchService).findStored("Java", 100L, "forks");
+    }
+
+    @Test
+    void listInvalidSortReturns400() throws Exception {
+        when(searchService.findStored(any(), any(), any()))
+                .thenThrow(new InvalidSortException("popularity"));
+
+        mockMvc.perform(get("/api/github/repositories")
+                        .param("sort", "popularity"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.message").value(
+                        "Unsupported sort value 'popularity'. Supported values: stars, forks, updated"));
+    }
+
+    @Test
+    void listNonNumericMinStarsReturns400() throws Exception {
+        mockMvc.perform(get("/api/github/repositories")
+                        .param("minStars", "abc"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.message").value(
+                        "Invalid value 'abc' for parameter 'minStars'"));
+    }
+
+    @Test
+    void listEmptyResultReturns200() throws Exception {
+        when(searchService.findStored(any(), any(), any()))
+                .thenReturn(new SearchRepositoriesResponse(0, List.of()));
+
+        mockMvc.perform(get("/api/github/repositories"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalCount").value(0))
+                .andExpect(jsonPath("$.repositories").isEmpty());
+    }
+
+    @Test
+    void listUnexpectedErrorReturns500WithoutLeakingDetails() throws Exception {
+        when(searchService.findStored(any(), any(), any()))
+                .thenThrow(new IllegalStateException("secret internals"));
+
+        mockMvc.perform(get("/api/github/repositories"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.status").value(500))
+                .andExpect(jsonPath("$.message").value("An unexpected error occurred"));
+    }
+
+    @Test
+    void listErrorBodyIncludesPath() throws Exception {
+        when(searchService.findStored(any(), any(), any()))
+                .thenThrow(new InvalidSortException("nope"));
+
+        mockMvc.perform(get("/api/github/repositories"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.path").value("/api/github/repositories"));
     }
 }

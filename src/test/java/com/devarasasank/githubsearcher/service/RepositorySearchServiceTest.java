@@ -10,6 +10,7 @@ import com.devarasasank.githubsearcher.dto.SearchRepositoriesResponse;
 import com.devarasasank.githubsearcher.entity.GitHubRepositoryEntity;
 import com.devarasasank.githubsearcher.exception.InvalidSortException;
 import com.devarasasank.githubsearcher.mapper.RepositoryMapper;
+import com.devarasasank.githubsearcher.repository.GitHubRepositoryRepository;
 import com.devarasasank.githubsearcher.repository.GitHubRepositoryUpserter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -18,6 +19,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Sort;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -27,10 +29,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -42,6 +46,9 @@ class RepositorySearchServiceTest {
 
     @Mock
     private GitHubRepositoryUpserter upserter;
+
+    @Mock
+    private GitHubRepositoryRepository repository;
 
     @Spy
     private RepositoryMapper mapper = new RepositoryMapper();
@@ -134,5 +141,106 @@ class RepositorySearchServiceTest {
                 new SearchRepositoriesRequest("spring", null, null, null)))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessage("boom");
+    }
+
+    private static GitHubRepositoryEntity entity(long id, String name, long stars) {
+        return new GitHubRepositoryEntity(
+                id, name, "desc", "octocat", "Java", stars, 5L,
+                OffsetDateTime.of(2024, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC));
+    }
+
+    @Test
+    void findStoredDefaultsToNoFiltersSortedByStarsDescending() {
+        when(repository.findByFilters(isNull(), isNull(), any(Sort.class)))
+                .thenReturn(List.of(entity(1L, "a", 10)));
+
+        SearchRepositoriesResponse response = service.findStored(null, null, null);
+
+        ArgumentCaptor<Sort> sortCaptor = ArgumentCaptor.forClass(Sort.class);
+        verify(repository).findByFilters(isNull(), isNull(), sortCaptor.capture());
+        Sort.Order order = sortCaptor.getValue().stream().findFirst().orElseThrow();
+        assertThat(order.getProperty()).isEqualTo("stars");
+        assertThat(order.getDirection()).isEqualTo(Sort.Direction.DESC);
+        assertThat(response.totalCount()).isEqualTo(1);
+        assertThat(response.repositories().getFirst().name()).isEqualTo("a");
+    }
+
+    @Test
+    void findStoredMapsEverySortOptionToItsColumn() {
+        when(repository.findByFilters(any(), any(), any(Sort.class))).thenReturn(List.of());
+
+        service.findStored(null, null, "forks");
+        service.findStored(null, null, "updated");
+        service.findStored(null, null, "stars");
+
+        ArgumentCaptor<Sort> sortCaptor = ArgumentCaptor.forClass(Sort.class);
+        verify(repository, times(3)).findByFilters(any(), any(), sortCaptor.capture());
+        assertThat(sortCaptor.getAllValues())
+                .extracting(sort -> sort.stream().findFirst().orElseThrow().getProperty())
+                .containsExactly("forks", "lastUpdated", "stars");
+        assertThat(sortCaptor.getAllValues())
+                .allSatisfy(sort -> assertThat(sort.stream().findFirst().orElseThrow().getDirection())
+                        .isEqualTo(Sort.Direction.DESC));
+    }
+
+    @Test
+    void findStoredPassesFiltersAndLowercasesLanguage() {
+        when(repository.findByFilters(any(), any(), any(Sort.class))).thenReturn(List.of());
+
+        service.findStored("  Java  ", 500L, "stars");
+
+        verify(repository).findByFilters(eq("java"), eq(500L), any(Sort.class));
+    }
+
+    @Test
+    void findStoredConvertsBlankLanguageToNull() {
+        when(repository.findByFilters(any(), any(), any(Sort.class))).thenReturn(List.of());
+
+        service.findStored("   ", null, "stars");
+
+        verify(repository).findByFilters(isNull(), isNull(), any(Sort.class));
+    }
+
+    @Test
+    void findStoredRejectsUnknownSortWithoutQuerying() {
+        assertThatThrownBy(() -> service.findStored(null, null, "popularity"))
+                .isInstanceOf(InvalidSortException.class);
+
+        verify(repository, never()).findByFilters(any(), any(), any());
+    }
+
+    @Test
+    void findStoredReturnsEmptyResponseWhenNothingMatches() {
+        when(repository.findByFilters(any(), any(), any(Sort.class))).thenReturn(List.of());
+
+        SearchRepositoriesResponse response = service.findStored("Java", 10_000L, null);
+
+        assertThat(response.totalCount()).isZero();
+        assertThat(response.repositories()).isEmpty();
+    }
+
+    @Test
+    void findStoredMapsEntitiesToPublicResponses() {
+        when(repository.findByFilters(any(), any(), any(Sort.class)))
+                .thenReturn(List.of(entity(42L, "spring-boot", 80_000L)));
+
+        SearchRepositoriesResponse response = service.findStored(null, null, "stars");
+
+        RepositoryResponse dto = response.repositories().getFirst();
+        assertThat(dto.id()).isEqualTo(42L);
+        assertThat(dto.name()).isEqualTo("spring-boot");
+        assertThat(dto.owner()).isEqualTo("octocat");
+        assertThat(dto.stars()).isEqualTo(80_000L);
+        assertThat(dto.lastUpdated()).isEqualTo(
+                OffsetDateTime.of(2024, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC));
+    }
+
+    @Test
+    void findStoredNeverCallsGitHubApi() {
+        when(repository.findByFilters(any(), any(), any(Sort.class))).thenReturn(List.of());
+
+        service.findStored("Java", null, null);
+
+        verify(gitHubApiClient, never()).searchRepositories(anyString(), any(), any(), anyInt());
     }
 }
