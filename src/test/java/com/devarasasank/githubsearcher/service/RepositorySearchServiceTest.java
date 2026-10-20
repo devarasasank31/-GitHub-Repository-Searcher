@@ -150,7 +150,7 @@ class RepositorySearchServiceTest {
     }
 
     @Test
-    void findStoredDefaultsToNoFiltersSortedByStarsDescending() {
+    void findStoredDefaultsToStarsDescendingWithDeterministicTieBreak() {
         when(repository.findByFilters(isNull(), isNull(), any(Sort.class)))
                 .thenReturn(List.of(entity(1L, "a", 10)));
 
@@ -158,29 +158,33 @@ class RepositorySearchServiceTest {
 
         ArgumentCaptor<Sort> sortCaptor = ArgumentCaptor.forClass(Sort.class);
         verify(repository).findByFilters(isNull(), isNull(), sortCaptor.capture());
-        Sort.Order order = sortCaptor.getValue().stream().findFirst().orElseThrow();
-        assertThat(order.getProperty()).isEqualTo("stars");
-        assertThat(order.getDirection()).isEqualTo(Sort.Direction.DESC);
+        assertThat(orderSequence(sortCaptor.getValue())).containsExactly("stars DESC", "id ASC");
         assertThat(response.totalCount()).isEqualTo(1);
         assertThat(response.repositories().getFirst().name()).isEqualTo("a");
     }
 
     @Test
-    void findStoredMapsEverySortOptionToItsColumn() {
+    void findStoredBuildsDeterministicOrderForEverySortOption() {
         when(repository.findByFilters(any(), any(), any(Sort.class))).thenReturn(List.of());
 
+        service.findStored(null, null, "stars");
         service.findStored(null, null, "forks");
         service.findStored(null, null, "updated");
-        service.findStored(null, null, "stars");
 
         ArgumentCaptor<Sort> sortCaptor = ArgumentCaptor.forClass(Sort.class);
         verify(repository, times(3)).findByFilters(any(), any(), sortCaptor.capture());
-        assertThat(sortCaptor.getAllValues())
-                .extracting(sort -> sort.stream().findFirst().orElseThrow().getProperty())
-                .containsExactly("forks", "lastUpdated", "stars");
-        assertThat(sortCaptor.getAllValues())
-                .allSatisfy(sort -> assertThat(sort.stream().findFirst().orElseThrow().getDirection())
-                        .isEqualTo(Sort.Direction.DESC));
+        assertThat(orderSequence(sortCaptor.getAllValues().get(0)))
+                .containsExactly("stars DESC", "id ASC");
+        assertThat(orderSequence(sortCaptor.getAllValues().get(1)))
+                .containsExactly("forks DESC", "stars DESC", "id ASC");
+        assertThat(orderSequence(sortCaptor.getAllValues().get(2)))
+                .containsExactly("lastUpdated DESC", "stars DESC", "id ASC");
+    }
+
+    private static List<String> orderSequence(Sort sort) {
+        return sort.stream()
+                .map(order -> order.getProperty() + " " + order.getDirection())
+                .toList();
     }
 
     @Test

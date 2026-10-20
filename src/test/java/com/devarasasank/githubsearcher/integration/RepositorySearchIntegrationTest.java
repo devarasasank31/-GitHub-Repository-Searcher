@@ -267,6 +267,65 @@ class RepositorySearchIntegrationTest {
     }
 
     @Test
+    void getRepositoriesOrdersEntireSequenceDeterministicallyForEverySort() throws Exception {
+        // Ties on the primary and secondary sort keys: order must fall through
+        // to stars DESC and then id ASC, never shuffle between requests.
+        insertRepository(1L, "alpha", "Java", 5L, 10L,
+                OffsetDateTime.of(2024, 1, 5, 0, 0, 0, 0, ZoneOffset.UTC));
+        insertRepository(2L, "beta", "Java", 9L, 10L,
+                OffsetDateTime.of(2024, 2, 1, 0, 0, 0, 0, ZoneOffset.UTC));
+        insertRepository(3L, "gamma", "Java", 9L, 10L,
+                OffsetDateTime.of(2024, 2, 10, 0, 0, 0, 0, ZoneOffset.UTC));
+        insertRepository(4L, "delta", "Python", 100L, 7L,
+                OffsetDateTime.of(2023, 12, 1, 0, 0, 0, 0, ZoneOffset.UTC));
+        insertRepository(5L, "epsilon", "Python", 1L, 12L,
+                OffsetDateTime.of(2023, 11, 1, 0, 0, 0, 0, ZoneOffset.UTC));
+
+        JsonNode byStars = parse(getFrom("/api/github/repositories?sort=stars"));
+        assertThat(names(byStars))
+                .containsExactly("delta", "beta", "gamma", "alpha", "epsilon");
+
+        JsonNode byForks = parse(getFrom("/api/github/repositories?sort=forks"));
+        assertThat(names(byForks))
+                .containsExactly("epsilon", "beta", "gamma", "alpha", "delta");
+
+        JsonNode byUpdated = parse(getFrom("/api/github/repositories?sort=updated"));
+        assertThat(names(byUpdated))
+                .containsExactly("gamma", "beta", "alpha", "delta", "epsilon");
+
+        JsonNode defaultSort = parse(getFrom("/api/github/repositories"));
+        assertThat(names(defaultSort))
+                .containsExactly("delta", "beta", "gamma", "alpha", "epsilon");
+
+        JsonNode filtered = parse(getFrom("/api/github/repositories?language=Java&sort=forks"));
+        assertThat(names(filtered)).containsExactly("beta", "gamma", "alpha");
+
+        JsonNode filteredStars = parse(getFrom("/api/github/repositories?language=java&minStars=9&sort=stars"));
+        assertThat(names(filteredStars)).containsExactly("beta", "gamma");
+
+        JsonNode minStarsOnly = parse(getFrom("/api/github/repositories?minStars=9&sort=stars"));
+        assertThat(names(minStarsOnly)).containsExactly("delta", "beta", "gamma");
+    }
+
+    @Test
+    void getRepositoriesReturnsSameOrderAcrossRepeatedRequests() throws Exception {
+        insertRepository(1L, "alpha", "Java", 5L, 10L,
+                OffsetDateTime.of(2024, 1, 5, 0, 0, 0, 0, ZoneOffset.UTC));
+        insertRepository(2L, "beta", "Java", 9L, 10L,
+                OffsetDateTime.of(2024, 2, 1, 0, 0, 0, 0, ZoneOffset.UTC));
+        insertRepository(3L, "gamma", "Java", 9L, 10L,
+                OffsetDateTime.of(2024, 2, 10, 0, 0, 0, 0, ZoneOffset.UTC));
+
+        List<String> first = names(parse(getFrom("/api/github/repositories?sort=forks")));
+        List<String> second = names(parse(getFrom("/api/github/repositories?sort=forks")));
+        List<String> third = names(parse(getFrom("/api/github/repositories?sort=forks")));
+
+        assertThat(first).containsExactly("beta", "gamma", "alpha");
+        assertThat(second).isEqualTo(first);
+        assertThat(third).isEqualTo(first);
+    }
+
+    @Test
     void getRepositoriesReturnsEmptyListWhenDatabaseIsEmpty() throws Exception {
         ResponseEntity<String> response = getFrom("/api/github/repositories");
 

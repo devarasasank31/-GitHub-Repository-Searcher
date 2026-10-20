@@ -70,8 +70,10 @@ public class RepositorySearchService {
     /**
      * Returns repositories already persisted in PostgreSQL, optionally
      * filtered by language and minimum star count. Never calls the GitHub
-     * API; results are ordered descending by the requested sort field
-     * (stars by default).
+     * API. Results are ordered descending by the requested sort field
+     * (stars by default) with deterministic tie-breaking — stars descending,
+     * then id ascending — so rows sharing the same primary value always come
+     * back in the same order.
      *
      * @param language  optional language filter, case-insensitive
      * @param minStars  optional minimum star count
@@ -86,7 +88,7 @@ public class RepositorySearchService {
                 : language.trim().toLowerCase(Locale.ROOT);
 
         List<GitHubRepositoryEntity> entities = repository.findByFilters(
-                languageFilter, minStars, Sort.by(Sort.Direction.DESC, sortProperty(sort)));
+                languageFilter, minStars, sortOrder(sort));
 
         List<RepositoryResponse> repositories = entities.stream()
                 .map(mapper::toResponse)
@@ -100,6 +102,20 @@ public class RepositorySearchService {
             case FORKS -> "forks";
             case UPDATED -> "lastUpdated";
         };
+    }
+
+    /**
+     * Builds a deterministic total order: the requested field descending,
+     * then stars descending, then id ascending as the final tie-breaker so
+     * equal primary (and equal secondary) values never shuffle between
+     * requests.
+     */
+    private static Sort sortOrder(RepositorySort sort) {
+        Sort.Order primary = Sort.Order.desc(sortProperty(sort));
+        if (primary.getProperty().equals("stars")) {
+            return Sort.by(primary, Sort.Order.asc("id"));
+        }
+        return Sort.by(primary, Sort.Order.desc("stars"), Sort.Order.asc("id"));
     }
 
     private void persistQuietly(List<GitHubRepositoryItem> items) {
