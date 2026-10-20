@@ -18,6 +18,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 import java.util.List;
+import java.util.concurrent.CancellationException;
 
 /**
  * {@link GitHubApiClient} implementation backed by Spring's {@link RestClient}.
@@ -101,7 +102,13 @@ public class GitHubRestClient implements GitHubApiClient {
                     "GitHub API returned a server error (HTTP " + e.getStatusCode().value() + ")",
                     e.getStatusCode().value());
         } catch (ResourceAccessException e) {
-            throw new GitHubUnavailableException("GitHub API could not be reached", e);
+            throw new GitHubUnavailableException("GitHub API could not be reached");
+        } catch (CancellationException e) {
+            // A read timeout can surface as a cancelled request instead of a
+            // socket timeout (race inside the JDK HTTP client's timeout
+            // handler). Translate it like any other timeout so it is retried
+            // and reported as 503 rather than leaking out as a 500.
+            throw new GitHubUnavailableException("GitHub API could not be reached");
         } catch (RestClientException e) {
             throw new GitHubUpstreamException("GitHub API returned an unexpected or malformed response", -1);
         }

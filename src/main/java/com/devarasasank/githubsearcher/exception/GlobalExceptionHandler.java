@@ -8,10 +8,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.time.Instant;
 import java.util.stream.Collectors;
@@ -23,6 +25,8 @@ import java.util.stream.Collectors;
  * <p>Status mapping:
  * <ul>
  *   <li>validation / bad input &rarr; 400</li>
+ *   <li>unknown route &rarr; 404</li>
+ *   <li>unsupported HTTP method &rarr; 405</li>
  *   <li>GitHub rate limit &rarr; 429</li>
  *   <li>GitHub auth failure &rarr; 502</li>
  *   <li>GitHub upstream error &rarr; 502</li>
@@ -77,6 +81,25 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(GitHubUnavailableException.class)
     public ResponseEntity<ApiError> handleUnavailable(GitHubUnavailableException ex, HttpServletRequest request) {
         return build(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), request);
+    }
+
+    /**
+     * Keeps Spring's own HTTP errors at their intended status codes. Without
+     * these handlers, the catch-all below would intercept them first and turn
+     * every unknown route into a 500 (the original root-cause bug for
+     * {@code GET /}). Genuine application exceptions are unaffected and still
+     * reach their own handlers or the 500 catch-all.
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiError> handleNotFound(NoResourceFoundException ex, HttpServletRequest request) {
+        return build(HttpStatus.NOT_FOUND, "No resource found for " + request.getRequestURI(), request);
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiError> handleMethodNotSupported(
+            HttpRequestMethodNotSupportedException ex, HttpServletRequest request) {
+        return build(HttpStatus.METHOD_NOT_ALLOWED,
+                "Method " + ex.getMethod() + " is not supported for " + request.getRequestURI(), request);
     }
 
     @ExceptionHandler(Exception.class)

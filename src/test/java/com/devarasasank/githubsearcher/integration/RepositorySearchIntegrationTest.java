@@ -418,6 +418,24 @@ class RepositorySearchIntegrationTest {
     }
 
     @Test
+    void rootHealthAndUnknownRoutesBehaveCorrectly() throws Exception {
+        JsonNode health = parse(getFrom("/health"));
+        assertThat(health.get("status").asText()).isEqualTo("UP");
+        assertThat(health.get("message").asText())
+                .isEqualTo("GitHub Repository Searcher API is running");
+
+        JsonNode root = parse(getFrom("/"));
+        assertThat(root.get("message").asText()).isEqualTo("GitHub Repository Searcher API");
+        assertThat(root.at("/links/health").asText()).isEqualTo("/health");
+        assertThat(root.at("/links/swaggerUi").asText()).isEqualTo("/swagger-ui.html");
+
+        ResponseEntity<String> missing = getFrom("/definitely-not-a-route");
+        assertThat(missing.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(parse(missing).get("message").asText())
+                .isEqualTo("No resource found for /definitely-not-a-route");
+    }
+
+    @Test
     void getRepositoriesReturnsSameOrderAcrossRepeatedRequests() throws Exception {
         insertRepository(1L, "alpha", "Java", 5L, 10L,
                 OffsetDateTime.of(2024, 1, 5, 0, 0, 0, 0, ZoneOffset.UTC));
