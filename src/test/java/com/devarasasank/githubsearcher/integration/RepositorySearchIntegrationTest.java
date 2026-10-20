@@ -23,9 +23,11 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
@@ -305,6 +307,43 @@ class RepositorySearchIntegrationTest {
 
         JsonNode minStarsOnly = parse(getFrom("/api/github/repositories?minStars=9&sort=stars"));
         assertThat(names(minStarsOnly)).containsExactly("delta", "beta", "gamma");
+    }
+
+    @Test
+    void getRepositoriesSortUpdatedOrdersByParsedTimestampsNotStarsOrForks() throws Exception {
+        // Three rows whose stars order, forks order and timestamp order are
+        // three different permutations: aaa leads stars, bbb leads forks,
+        // ccc has the newest timestamp but the fewest stars and forks.
+        insertRepository(1L, "aaa-most-stars", "Java", 900L, 1L,
+                OffsetDateTime.of(2024, 6, 1, 0, 0, 0, 0, ZoneOffset.UTC));
+        insertRepository(2L, "bbb-most-forks", "Java", 1L, 900L,
+                OffsetDateTime.of(2023, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC));
+        insertRepository(3L, "ccc-newest", "Java", 50L, 50L,
+                OffsetDateTime.of(2025, 3, 1, 0, 0, 0, 0, ZoneOffset.UTC));
+
+        JsonNode byUpdated = parse(getFrom("/api/github/repositories?sort=updated"));
+        assertThat(names(byUpdated)).containsExactly("ccc-newest", "aaa-most-stars", "bbb-most-forks");
+
+        // Assert on the parsed timestamps themselves, descending.
+        List<Instant> timestamps = new ArrayList<>();
+        byUpdated.get("repositories").forEach(repo ->
+                timestamps.add(Instant.parse(repo.get("lastUpdated").asText())));
+        assertThat(timestamps).hasSize(3);
+        assertThat(timestamps).isSortedAccordingTo(Comparator.reverseOrder());
+        assertThat(timestamps.get(0)).isAfter(timestamps.get(1));
+        assertThat(timestamps.get(1)).isAfter(timestamps.get(2));
+
+        // The other sort options must each produce their own different order,
+        // proving sort=updated does not accidentally sort by stars or forks.
+        JsonNode byStars = parse(getFrom("/api/github/repositories?sort=stars"));
+        assertThat(names(byStars)).containsExactly("aaa-most-stars", "ccc-newest", "bbb-most-forks");
+
+        JsonNode byForks = parse(getFrom("/api/github/repositories?sort=forks"));
+        assertThat(names(byForks)).containsExactly("bbb-most-forks", "ccc-newest", "aaa-most-stars");
+
+        // Filters still apply together with sort=updated.
+        JsonNode filtered = parse(getFrom("/api/github/repositories?language=java&minStars=40&sort=updated"));
+        assertThat(names(filtered)).containsExactly("ccc-newest", "aaa-most-stars");
     }
 
     @Test
