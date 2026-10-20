@@ -347,6 +347,77 @@ class RepositorySearchIntegrationTest {
     }
 
     @Test
+    void searchThenGetUpdatedSortOrdersByTimestampsWrittenThroughFullPipeline() throws Exception {
+        // Production write path: GitHub JSON -> Jackson -> mapper -> batched
+        // upsert -> PostgreSQL -> GET. The previous ordering tests seeded the
+        // database directly; this one goes through POST /search like Render.
+        String firstPage = """
+                {
+                  "total_count": 3,
+                  "incomplete_results": false,
+                  "items": [
+                    {"id": 101, "name": "geopulse", "description": "d", "language": "Java",
+                     "stargazers_count": 100, "forks_count": 10, "updated_at": "2026-10-20T09:46:25Z",
+                     "owner": {"login": "octocat", "id": 1}},
+                    {"id": 102, "name": "nightwatch", "description": "d", "language": "Java",
+                     "stargazers_count": 500, "forks_count": 50, "updated_at": "2026-10-19T23:59:59Z",
+                     "owner": {"login": "octocat", "id": 1}},
+                    {"id": 103, "name": "solstice", "description": "d", "language": "Java",
+                     "stargazers_count": 300, "forks_count": 30, "updated_at": "2026-10-18T12:00:00Z",
+                     "owner": {"login": "octocat", "id": 1}}
+                  ]
+                }
+                """;
+        wireMock.stubFor(get(urlPathEqualTo("/search/repositories")).willReturn(okJson(firstPage)));
+        post("{\"query\": \"observability\", \"maxResults\": 30}");
+
+        // Lifecycle: geopulse receives a newer commit and is re-indexed.
+        String secondPage = """
+                {
+                  "total_count": 1,
+                  "incomplete_results": false,
+                  "items": [
+                    {"id": 101, "name": "geopulse", "description": "d", "language": "Java",
+                     "stargazers_count": 100, "forks_count": 10, "updated_at": "2026-10-21T10:00:00Z",
+                     "owner": {"login": "octocat", "id": 1}}
+                  ]
+                }
+                """;
+        wireMock.resetAll();
+        wireMock.stubFor(get(urlPathEqualTo("/search/repositories")).willReturn(okJson(secondPage)));
+        post("{\"query\": \"observability\", \"maxResults\": 30}");
+
+        JsonNode byUpdated = parse(getFrom("/api/github/repositories?sort=updated"));
+        assertThat(names(byUpdated)).containsExactly("geopulse", "nightwatch", "solstice");
+
+        // Every adjacent pair in the complete returned list must have
+        // strictly descending parsed timestamps.
+        List<Instant> timestamps = new ArrayList<>();
+        byUpdated.get("repositories").forEach(repo ->
+                timestamps.add(Instant.parse(repo.get("lastUpdated").asText())));
+        assertThat(timestamps).hasSize(3);
+        for (int i = 0; i < timestamps.size() - 1; i++) {
+            assertThat(timestamps.get(i))
+                    .as("adjacent pair %d and %d", i, i + 1)
+                    .isAfter(timestamps.get(i + 1));
+        }
+
+        // The refreshed geopulse timestamp reached the database via the
+        // upsert, not just the initial insert.
+        OffsetDateTime storedGeopulse = jdbcTemplate.queryForObject(
+                "SELECT last_updated FROM github_repositories WHERE id = ?", OffsetDateTime.class, 101L);
+        assertThat(storedGeopulse.toInstant()).isEqualTo(Instant.parse("2026-10-21T10:00:00Z"));
+
+        // Other sort options and filters still correct through the same pipeline.
+        assertThat(names(parse(getFrom("/api/github/repositories?sort=stars"))))
+                .containsExactly("nightwatch", "solstice", "geopulse");
+        assertThat(names(parse(getFrom("/api/github/repositories?sort=forks"))))
+                .containsExactly("nightwatch", "solstice", "geopulse");
+        assertThat(names(parse(getFrom("/api/github/repositories?language=java&minStars=200&sort=updated"))))
+                .containsExactly("nightwatch", "solstice");
+    }
+
+    @Test
     void getRepositoriesReturnsSameOrderAcrossRepeatedRequests() throws Exception {
         insertRepository(1L, "alpha", "Java", 5L, 10L,
                 OffsetDateTime.of(2024, 1, 5, 0, 0, 0, 0, ZoneOffset.UTC));
